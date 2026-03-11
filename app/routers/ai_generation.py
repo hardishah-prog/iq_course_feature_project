@@ -1,0 +1,109 @@
+"""
+routers/ai_generation.py
+------------------------
+AI-powered content generation endpoints.
+
+POST /generate-questions     — enqueue background job to generate MCQ questions via Groq
+POST /generate-course        — enqueue background job to generate a full course + lesson + questions
+POST /generate-image-puzzle  — return a simulated image-based cognitive puzzle
+"""
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import Optional
+
+from app.database import get_db
+from app.redis_conn import task_queue
+from app.workers.tasks import generate_ai_questions, generate_ai_course, generate_image_puzzle
+from app.services.puzzle_service import get_random_puzzle
+from app.models.lesson import Lesson
+
+router = APIRouter(tags=["AI Generation"])
+
+
+# ── Pydantic Schemas ──────────────────────────────────────────────────────────
+
+class GenerateQuestionsRequest(BaseModel):
+    topic: str
+    cognitive_area: str
+    difficulty: str
+    lesson_id: int  # Questions will be linked to this lesson
+
+
+class GenerateCourseRequest(BaseModel):
+    topic: str
+    difficulty: str
+
+
+class GenerateImagePuzzleRequest(BaseModel):
+    cognitive_area: Optional[str] = "Pattern Recognition"
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.post("/generate-questions")
+def enqueue_generate_questions(
+    payload: GenerateQuestionsRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Enqueue a background job to generate 3–5 MCQ questions using the Groq API.
+    Questions are saved to the database under the specified lesson_id.
+    """
+    # Validate the lesson exists before enqueuing
+    lesson = db.query(Lesson).filter(Lesson.id == payload.lesson_id).first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    # Enqueue the RQ job
+    job = task_queue.enqueue(
+        generate_ai_questions,
+        payload.topic,
+        payload.cognitive_area,
+        payload.difficulty,
+        payload.lesson_id,
+        job_timeout=120  # 2 minute timeout
+    )
+
+    return {
+        "message": "Question generation job enqueued successfully.",
+        "job_id": job.id,
+        "lesson_id": payload.lesson_id,
+        "topic": payload.topic,
+        "difficulty": payload.difficulty,
+    }
+
+
+@router.post("/generate-course")
+def enqueue_generate_course(payload: GenerateCourseRequest):
+    """
+    Enqueue a background job to generate a complete course:
+    - Creates a Course record
+    - Creates a Lesson with AI-generated content text
+    - Generates 3 MCQ questions
+    """
+    job = task_queue.enqueue(
+        generate_ai_course,
+        payload.topic,
+        payload.difficulty,
+        job_timeout=180  # 3 minute timeout
+    )
+
+    return {
+        "message": "Course generation job enqueued successfully.",
+        "job_id": job.id,
+        "topic": payload.topic,
+        "difficulty": payload.difficulty,
+    }
+
+
+@router.post("/generate-image-puzzle")
+def get_image_puzzle(payload: GenerateImagePuzzleRequest):
+    """
+    Return a simulated image-based cognitive puzzle.
+    For demo purposes, puzzles are served from the static/puzzles/ folder.
+    In production, this could enqueue an AI image generation job.
+    """
+    puzzle = get_random_puzzle(payload.cognitive_area)
+    return puzzle
