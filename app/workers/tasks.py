@@ -17,7 +17,7 @@ import logging
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.services.ai_service import generate_questions, generate_course_content
+from app.services.ai_service import generate_questions, generate_course_content, generate_lesson_content
 from app.services.puzzle_service import get_random_puzzle
 
 logger = logging.getLogger(__name__)
@@ -203,3 +203,43 @@ def generate_image_puzzle(cognitive_area: str = "Pattern Recognition"):
     logger.info(f"[Worker] Generating image puzzle for: {cognitive_area}")
     puzzle = get_random_puzzle(cognitive_area)
     return {"status": "success", "puzzle": puzzle}
+
+
+def generate_ai_lesson(topic: str, course_id: int, difficulty: str):
+    """
+    RQ Task: Generate a single AI lesson and attach it to an existing course.
+
+    Args:
+        topic      — Topic for the lesson
+        course_id  — Existing course to attach the lesson to
+        difficulty — easy / medium / hard
+    """
+    from app.models.lesson import Lesson
+    from app.models.course import Course
+
+    logger.info(f"[Worker] Generating lesson: topic={topic}, course_id={course_id}")
+    db = _get_db_session()
+    try:
+        # Validate course exists
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise ValueError(f"Course {course_id} not found")
+
+        lesson_data = generate_lesson_content(topic, difficulty)
+
+        lesson = Lesson(
+            course_id=course_id,
+            title=lesson_data.get("lesson_title", f"Lesson on {topic}"),
+            content_text=lesson_data.get("content_text", ""),
+        )
+        db.add(lesson)
+        db.commit()
+        db.refresh(lesson)
+        logger.info(f"[Worker] Lesson created: lesson_id={lesson.id}")
+        return {"status": "success", "lesson_id": lesson.id, "title": lesson.title}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[Worker] Error generating lesson: {e}")
+        raise
+    finally:
+        db.close()

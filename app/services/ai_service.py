@@ -84,6 +84,53 @@ Return ONLY valid JSON in this exact format (no explanation, no markdown):
         return _fallback_questions(topic, difficulty)
 
 
+
+def generate_lesson_content(topic: str, difficulty: str) -> dict:
+    """
+    Ask Groq to generate a single lesson (title + content text) for a topic.
+
+    Returns:
+        Dict with keys:
+          - lesson_title (str)
+          - content_text (str)
+    """
+    prompt = f"""You are an expert cognitive training instructor.
+
+Write a single training lesson about "{topic}" at {difficulty} difficulty.
+
+Return ONLY valid JSON in this exact format (no explanation, no markdown):
+{{
+  "lesson_title": "A concise, descriptive lesson title",
+  "content_text": "3-5 sentences of lesson content explaining the concept clearly."
+}}
+"""
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=800,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        lesson_data = json.loads(raw)
+        logger.info(f"Generated lesson content for topic: {topic}")
+        return lesson_data
+    except Exception as e:
+        logger.error(f"Groq API error generating lesson: {e}")
+        return {
+            "lesson_title": f"Introduction to {topic.title()}",
+            "content_text": (
+                f"This lesson covers core concepts of {topic}. "
+                f"Students will explore key principles at {difficulty} difficulty. "
+                f"Apply these ideas through structured exercises."
+            ),
+        }
+
+
 def generate_course_content(topic: str, difficulty: str) -> dict:
     """
     Ask Groq to generate a full lesson with content text and 3 questions.
